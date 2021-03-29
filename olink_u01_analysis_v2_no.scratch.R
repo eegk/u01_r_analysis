@@ -51,10 +51,11 @@ colitis_metadata$Colitis[colitis_metadata$Colitis %in% "Healthy"] <- "No"
 colitis_metadata$sample_id <- paste("sample",1:nrow(colitis_metadata),sep="_")
 ### add the ids to each row
 rownames(colitis_data_matrix) <- colitis_metadata$sample_id
+### important filter
 ### samples problematic, either pass or NA in one of the experiments
 table(!is.na(colitis_data_matrix$TNFRSF9...2))
 ### remove NA samples
-ix <- !is.na(colitis_data_matrix$TNFRSF9...2)
+ix <- which(!is.na(colitis_data_matrix$TNFRSF9...2))
 ### data
 colitis_metadata <- colitis_metadata[ix,]
 colitis_data_matrix <- colitis_data_matrix[ix,]
@@ -78,6 +79,33 @@ protein_metadata$Molecule_Experiment <- paste(protein_metadata$Experiment_Short,
 ###
 colitis_metadata$Study_Type<- paste(colitis_metadata$Study,colitis_metadata$Type,sep="___")
 colitis_metadata$Colitis_Timepoint <- paste(colitis_metadata$Colitis,colitis_metadata$Timepoint,sep="___")
+### load clinical data
+clinical_data <- as.data.frame(readxl::read_excel("/Users/gonzae34/Documents/projects_gnjatic/U01_Colitis_Project/u01_olink_colitis_data/Colitis Biomarker List deidentified.xlsx",sheet=2))
+### label
+colnames(clinical_data)[1] <- "Patient_ID"
+colnames(colitis_metadata)[9] <- "Patient_ID"
+### label
+colitis_metadata$Patient_ID <- substr(colitis_metadata$Patient_ID,1,5)
+### check
+table(colitis_metadata$Patient_ID %in% clinical_data$Patient_ID)
+table(clinical_data$Patient_ID %in% colitis_metadata$Patient_ID)
+clinical_data$Patient_ID[which(!clinical_data$Patient_ID %in% colitis_metadata$Patient_ID)][1] <- "RK013"
+### Filter
+colitis_metadata <- colitis_metadata[ which(colitis_metadata$Patient_ID %in% clinical_data$Patient_ID), ]
+### Include clinical data 
+colitis_metadata <- merge(colitis_metadata,clinical_data,by="Patient_ID")
+### clean
+rm(clinical_data)
+### check
+table(colnames(colitis_data_matrix) %in% colitis_metadata$sample_id)
+### filter controls, etc...
+colitis_data_matrix <- colitis_data_matrix[,which(colnames(colitis_data_matrix) %in% colitis_metadata$sample_id)]
+### sort
+colitis_metadata <- colitis_metadata[order(colitis_metadata$sample_id),]
+colitis_data_matrix <- colitis_data_matrix[,order(colnames(colitis_data_matrix))]
+### check
+identical(colitis_metadata$sample_id,colnames(colitis_data_matrix)) ; rm(ix)
+####
 ### STORE CHECKPOINT DATA
 ### save.image(file="u01_RData_files/olink_experiment.RData")
 #############################################################################################################################################
@@ -86,27 +114,66 @@ colitis_metadata$Colitis_Timepoint <- paste(colitis_metadata$Colitis,colitis_met
 ### Load checkpoint
 load(file="u01_RData_files/olink_experiment.RData")
 ### Inspect data
-dim(colitis_data_matrix) # 184 183
-dim(colitis_metadata) # 183 25
+dim(colitis_data_matrix) # 150 183
+dim(colitis_metadata) # 150 25
 dim(protein_metadata) # 184 6
 ### Select only immune panel (EXP 1)
 ix <- which(protein_metadata$Experiment_Short %in% "I")
 ### NOTE1: Study and fluid are correlated
 ### NOTE2: Select only the first experiment
 ### SUBSET & Replace NAs with average value
-colitis_data_matrix[ix,][is.na(colitis_data_matrix[ix,])] <- summary(c(unlist(colitis_data_matrix[ix,])))[3]
-### 
-form <- ~ (1|QC) + (1|Patient) + (1|Plate) + (1|Timepoint) + (1|Study) + (1|Colitis) 
+colitis_data_matrix[ix,][is.na(colitis_data_matrix[ix,])] <- summary(c(unlist(colitis_data_matrix[ix,])))[4]
+### Adjust metadata
+###
+colnames(colitis_metadata)[34] <- "days_on_IPI"
+colnames(colitis_metadata)[26] <- "Age_at_IPI_Start"
+colnames(colitis_metadata)[27] <- "Sex"
+colitis_metadata$Sex[colitis_metadata$Sex %in% 1] <- "M"
+colitis_metadata$Sex[colitis_metadata$Sex %in% 2] <- "F"
+colnames(colitis_metadata)[28] <- "Ethnicity"
+colitis_metadata$Ethnicity[colitis_metadata$Ethnicity %in% 1] <- "white"
+colitis_metadata$Ethnicity[colitis_metadata$Ethnicity %in% 2] <- "black"
+colitis_metadata$Ethnicity[colitis_metadata$Ethnicity %in% 3] <- "american"
+colitis_metadata$Ethnicity[colitis_metadata$Ethnicity %in% 4] <- "asian"
+colitis_metadata$Ethnicity[colitis_metadata$Ethnicity %in% 5] <- "other"
+colitis_metadata$Ethnicity[colitis_metadata$Ethnicity %in% 6] <- "pacific_islander"
+colitis_metadata$Ethnicity[colitis_metadata$Ethnicity %in% 7] <- "other"
+colnames(colitis_metadata)[29] <- "ICI_regimen"
+colitis_metadata$ICI_regimen[colitis_metadata$ICI_regimen %in% "1"] <- "IPI"
+colitis_metadata$ICI_regimen[colitis_metadata$ICI_regimen %in% "2"] <- "IPI_NIVO"
+colnames(colitis_metadata)[30]  <- "IPI_dose_mg_kg"
+colnames(colitis_metadata)[31]  <- "NIVO_dose_mg_kg"
+colnames(colitis_metadata)[32]  <- "IPI_dose_mg"
+colnames(colitis_metadata)[33]  <- "NIVO_dose_mg"
+colnames(colitis_metadata)[35] <- "Diarrhea"
+### check
+table(colitis_metadata$Colitis,colitis_metadata$Diarrhea)
+### check
+colitis_metadata$NIVO_dose_mg_kg <- as.numeric(colitis_metadata$NIVO_dose_mg_kg)
+colitis_metadata$NIVO_dose_mg_kg[is.na(colitis_metadata$NIVO_dose_mg_kg)] <- 0
+#############################################################################################################################################
+
+
+
+### Regression with VariancePartition
+#############################################################################################################################################
+### verify
+table(colitis_metadata$NIVO_dose_mg_kg,colitis_metadata$ICI_regimen)
+### Model
+form <- ~ (1|QC) + (1|Patient_ID) + (1|Plate) + (1|Sex) + Age_at_IPI_Start + IPI_dose_mg_kg + NIVO_dose_mg_kg + (1|Ethnicity) + (1|Timepoint) + (1|Study) + (1|Colitis)
+### Select only immune panel (EXP 1)
+ix <- which(protein_metadata$Experiment_Short %in% "I")
+### Run regression
 variance_exprs_matrix <- fitExtractVarPartModel(colitis_data_matrix[ix,], form, colitis_metadata)
 ###  figure for variance
 #############################################################################################################################################
 pdf(file="u01_olink_colitis_figures/VP_olink_inflammation_experiment.pdf",width = 4, height = 4)
 plotVarPart( sortCols( variance_exprs_matrix[,] , decreasing=FALSE) ) + 
-  ggtitle('Olink Target 96 Inflammation(v.3022)') + 
-  ylim(0,75) + ### Reduce the amount of white space
-  theme(axis.text.x = element_text(angle = 45,hjust = 1)) + 
+  ggtitle('Olink Target 96\nInflammation(v.3022)') + ylim(0,100) + 
+  #ylim(0,75) + ### Reduce the amount of white space
+  theme(axis.text.x = element_text(angle = 0,hjust = 1)) + 
   coord_flip() + 
-  ylab("Variance explained (%)") +
+  ylab("Variance (%)") +
   theme(text = element_text(size=rel(4.8)),
         legend.text=element_text(size=rel(3.0)),
         axis.title.x = element_text(size=rel(3.0)),
@@ -123,138 +190,148 @@ variance_exprs_matrix <- fitExtractVarPartModel(colitis_data_matrix[ix,], form, 
 #############################################################################################################################################
 pdf(file="u01_olink_colitis_figures/VP_olink_IO_experiment.pdf",width = 4, height = 4)
 plotVarPart( sortCols( variance_exprs_matrix , decreasing=FALSE) ) + 
-  ggtitle('Olink Target 96 Immuno-Oncology(v.3112)') + ylim(0,100) + 
-  theme(axis.text.x = element_text(angle = 45,hjust = 1)) + coord_flip() + 
+  ggtitle('Olink Target 96\nImmuno-Oncology(v.3112)') + ylim(0,100) + 
+  theme(axis.text.x = element_text(angle = 0,hjust = 1)) + coord_flip() + 
   theme(text = element_text(size=rel(4.8)),
         legend.text=element_text(size=rel(3.0)),
         axis.title.x = element_text(size=rel(3.0)),
         plot.title=element_text(size=rel(2)) ) +
-  ylab("Variance explained (%)")
+  ylab("Variance (%)")
 dev.off()
+#############################################################################################################################################
+#############################################################################################################################################
+
+### Other tests
 #############################################################################################################################################
 ### Repeat including Type, which estimates the variance between the controls
 ### Select only immune panel (EXP 1)
-ix <- which(protein_metadata$Experiment_Short %in% "I")
+#ix <- which(protein_metadata$Experiment_Short %in% "I")
 ### NOTE1: Study and fluid are correlated
 ### NOTE2: Select only the first experiment
 ### Replace NAs with average value (few NAs, conversion is possible)
-colitis_data_matrix[ix,][is.na(colitis_data_matrix[ix,])] <- summary(c(unlist(colitis_data_matrix[ix,])))[3]
+#colitis_data_matrix[ix,][is.na(colitis_data_matrix[ix,])] <- summary(c(unlist(colitis_data_matrix[ix,])))[3]
 ### 
-form <- ~ (1|QC) + (1|Type) + (1|Patient) + (1|Plate) + (1|Timepoint) + (1|Study) + (1|Colitis) 
-variance_exprs_matrix <- fitExtractVarPartModel(colitis_data_matrix[ix,], form, colitis_metadata, )
+#form <- ~ (1|QC) + (1|Type) + (1|Patient) + (1|Plate) + (1|Timepoint) + (1|Study) + (1|Colitis) 
+#variance_exprs_matrix <- fitExtractVarPartModel(colitis_data_matrix[ix,], form, colitis_metadata, )
 ###
 #pdf(file="u01_olink_colitis_figures/VP_olink_inflammation_experiment_w_type.pdf",width = 4, height = 4)
-plotVarPart( sortCols( variance_exprs_matrix[,] , decreasing=FALSE) ) + ggtitle('Olink Target 96 Inflammation(v.3022)') + ylim(0,75) + theme(axis.text.x = element_text(angle = 45,hjust = 1)) + coord_flip() + theme(plot.title = element_text(size=12)) + ylab("Variance explained (%)")
+#plotVarPart( sortCols( variance_exprs_matrix[,] , decreasing=FALSE) ) + ggtitle('Olink Target 96 Inflammation(v.3022)') + ylim(0,75) + theme(axis.text.x = element_text(angle = 45,hjust = 1)) + coord_flip() + theme(plot.title = element_text(size=12)) + ylab("Variance explained (%)")
 #dev.off()
 ###
 ### Select EXP 2
-ix <- which(protein_metadata$Experiment_Short %in% "IO")
+#ix <- which(protein_metadata$Experiment_Short %in% "IO")
 ### average replace
-colitis_data_matrix[ix,][is.na(colitis_data_matrix[ix,])] <- summary(c(unlist(colitis_data_matrix[ix,])))[3]
+#colitis_data_matrix[ix,][is.na(colitis_data_matrix[ix,])] <- summary(c(unlist(colitis_data_matrix[ix,])))[3]
 ### 
-variance_exprs_matrix <- fitExtractVarPartModel(colitis_data_matrix[ix,], form, colitis_metadata, )
+#variance_exprs_matrix <- fitExtractVarPartModel(colitis_data_matrix[ix,], form, colitis_metadata, )
 ###
 #pdf(file="u01_olink_colitis_figures/VP_olink_IO_experiment_w_type.pdf",width = 4, height = 4)
-plotVarPart( sortCols( variance_exprs_matrix , decreasing=FALSE) ) + ggtitle('Olink Target 96 Immuno-Oncology(v.3112)') + ylim(0,100) + theme(axis.text.x = element_text(angle = 45,hjust = 1)) + coord_flip() + theme(plot.title = element_text(size=12)) + ylab("Variance explained (%)")
+#plotVarPart( sortCols( variance_exprs_matrix , decreasing=FALSE) ) + ggtitle('Olink Target 96 Immuno-Oncology(v.3112)') + ylim(0,100) + theme(axis.text.x = element_text(angle = 45,hjust = 1)) + coord_flip() + theme(plot.title = element_text(size=12)) + ylab("Variance explained (%)")
 #dev.off()
 ###
 ### clean up space
-rm(variance_exprs_matrix,text,ix,form,test)
+#rm(variance_exprs_matrix,text,ix,form,test)
 ###
 #############################################################################################################################################
 ### Profiling & Clustering
 #############################################################################################################################################
 ### +++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
 ### Select 1 experiment
+### test for internal controls
 ### +++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
-ix <- which(protein_metadata$Experiment_Short %in% "I")
+#ix <- which(protein_metadata$Experiment_Short %in% "I")
 ### subset
-colitis_data_matrix_I <- colitis_data_matrix[ix,]
+#colitis_data_matrix_I <- colitis_data_matrix[ix,]
 ### select IPC
-ix <- which(colitis_metadata$Patient %in% "IPC")
+#ix <- which(colitis_metadata$Patient %in% "IPC")
 ### loop correlations
-my_matrix <- colitis_data_matrix_I[,ix]
-the_rest <- colnames(colitis_data_matrix_I[,ix])
-rm(my_storage) ; my_storage <- list() ; count=1
-for (xxi in 1:length(the_rest) ){
-  for( xxy in 1:length(the_rest)){
-    my_test <- cor.test(my_matrix[,the_rest[xxi]],my_matrix[,the_rest[xxy]],method="spearman")    
-    my_storage[[count]] <- data.frame( p.value = my_test$p.value , S = my_test$statistic , Rho = my_test$estimate ,
-                                       Sample_A = the_rest[xxi] , Sample_B = the_rest[xxy] )
-    count=count+1  } }
+#my_matrix <- colitis_data_matrix_I[,ix]
+#the_rest <- colnames(colitis_data_matrix_I[,ix])
+#rm(my_storage) ; my_storage <- list() ; count=1
+#for (xxi in 1:length(the_rest) ){
+#  for( xxy in 1:length(the_rest)){
+#    my_test <- cor.test(my_matrix[,the_rest[xxi]],my_matrix[,the_rest[xxy]],method="spearman")    
+#    my_storage[[count]] <- data.frame( p.value = my_test$p.value , S = my_test$statistic , Rho = my_test$estimate ,
+#                                       Sample_A = the_rest[xxi] , Sample_B = the_rest[xxy] )
+#    count=count+1  } }
 ### data process
-my_storage <- do.call(rbind,my_storage)
-my_storage$nP.value <- -log10(my_storage$p.value)
-my_storage$nP.value[my_storage$nP.value > 10]  <- 10
+#my_storage <- do.call(rbind,my_storage)
+#my_storage$nP.value <- -log10(my_storage$p.value)
+#my_storage$nP.value[my_storage$nP.value > 10]  <- 10
 ### plot
 #pdf(file="u01_olink_colitis_figures/correlations_internal_controls_i.pdf",width = 4, height = 3.5)
-ggplot(my_storage, aes(Sample_A, Sample_B, color= Rho, size=nP.value )) + 
-  geom_point(shape=16)+ geom_text(aes(label=round(Rho,2)),size=2,color="black") +
-  scale_colour_gradient2(low='firebrick', mid="white",high='steelblue', name='Rho') + #,breaks = c(-2.8, 0, 1, 5)) + #scale_color_viridis() +
-  theme_bw() +rotate_x_text(angle=45) + 
-  labs(x ='', y='', title='IPCs-I') 
+#ggplot(my_storage, aes(Sample_A, Sample_B, color= Rho, size=nP.value )) + 
+#  geom_point(shape=16)+ geom_text(aes(label=round(Rho,2)),size=2,color="black") +
+#  scale_colour_gradient2(low='firebrick', mid="white",high='steelblue', name='Rho') + #,breaks = c(-2.8, 0, 1, 5)) + #scale_color_viridis() +
+#  theme_bw() +rotate_x_text(angle=45) + 
+#  labs(x ='', y='', title='IPCs-I') 
 #dev.off()
 ### +++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
 ### Select 2 experiment
+### test for internal controls
 ### +++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
-ix <- which(protein_metadata$Experiment_Short %in% "IO")
+#ix <- which(protein_metadata$Experiment_Short %in% "IO")
 ### subset
-colitis_data_matrix_I <- colitis_data_matrix[ix,]
+#colitis_data_matrix_I <- colitis_data_matrix[ix,]
 ### select IPC
-ix <- which(colitis_metadata$Patient %in% "IPC")
+#ix <- which(colitis_metadata$Patient %in% "IPC")
 ### loop correlations
-my_matrix <- colitis_data_matrix_I[,ix]
-the_rest <- colnames(colitis_data_matrix_I[,ix])
-rm(my_storage) ; my_storage <- list() ; count=1
-for (xxi in 1:length(the_rest) ){
-  for( xxy in 1:length(the_rest)){
-    my_test <- cor.test(my_matrix[,the_rest[xxi]],my_matrix[,the_rest[xxy]],method="spearman")    
-    my_storage[[count]] <- data.frame( p.value = my_test$p.value , S = my_test$statistic , Rho = my_test$estimate ,
-                                       Sample_A = the_rest[xxi] , Sample_B = the_rest[xxy] )
-    count=count+1  } }
+#my_matrix <- colitis_data_matrix_I[,ix]
+#the_rest <- colnames(colitis_data_matrix_I[,ix])
+#rm(my_storage) ; my_storage <- list() ; count=1
+#for (xxi in 1:length(the_rest) ){
+#  for( xxy in 1:length(the_rest)){
+#    my_test <- cor.test(my_matrix[,the_rest[xxi]],my_matrix[,the_rest[xxy]],method="spearman")    
+#    my_storage[[count]] <- data.frame( p.value = my_test$p.value , S = my_test$statistic , Rho = my_test$estimate ,
+#                                       Sample_A = the_rest[xxi] , Sample_B = the_rest[xxy] )
+#    count=count+1  } }
 ### data process
-my_storage <- do.call(rbind,my_storage)
-my_storage$nP.value <- -log10(my_storage$p.value)
-my_storage$nP.value[my_storage$nP.value > 10]  <- 10
+#my_storage <- do.call(rbind,my_storage)
+#my_storage$nP.value <- -log10(my_storage$p.value)
+#my_storage$nP.value[my_storage$nP.value > 10]  <- 10
 ### plot
 #pdf(file="u01_olink_colitis_figures/correlations_internal_controls_io.pdf",width = 4, height = 3.5)
-ggplot(my_storage, aes(Sample_A, Sample_B, color= Rho, size=nP.value )) + 
-  geom_point(shape=16)+ geom_text(aes(label=round(Rho,2)),size=2,color="black") +
-  scale_colour_gradient2(low='firebrick', mid="white",high='steelblue', name='Rho') + #,breaks = c(-2.8, 0, 1, 5)) + #scale_color_viridis() +
-  theme_bw() +rotate_x_text(angle=45) + 
-  labs(x ='', y='', title='IPCs-IO') 
+#ggplot(my_storage, aes(Sample_A, Sample_B, color= Rho, size=nP.value )) + 
+#  geom_point(shape=16)+ geom_text(aes(label=round(Rho,2)),size=2,color="black") +
+#  scale_colour_gradient2(low='firebrick', mid="white",high='steelblue', name='Rho') + #,breaks = c(-2.8, 0, 1, 5)) + #scale_color_viridis() +
+#  theme_bw() +rotate_x_text(angle=45) + 
+#  labs(x ='', y='', title='IPCs-IO') 
 #dev.off()
 ### +++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
-### Select both experiment
+### Select both experiments
+### test for internal controls
 ### +++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
 ### subset
-colitis_data_matrix_I <- colitis_data_matrix
+#colitis_data_matrix_I <- colitis_data_matrix
 ### select IPC
-ix <- which(colitis_metadata$Patient %in% "IPC")
+#ix <- which(colitis_metadata$Patient %in% "IPC")
 ### loop correlations
-my_matrix <- colitis_data_matrix_I[,ix]
-the_rest <- colnames(colitis_data_matrix_I[,ix])
-rm(my_storage) ; my_storage <- list() ; count=1
-for (xxi in 1:length(the_rest) ){
-  for( xxy in 1:length(the_rest)){
-    my_test <- cor.test(my_matrix[,the_rest[xxi]],my_matrix[,the_rest[xxy]],method="spearman")    
-    my_storage[[count]] <- data.frame( p.value = my_test$p.value , S = my_test$statistic , Rho = my_test$estimate ,
-                                       Sample_A = the_rest[xxi] , Sample_B = the_rest[xxy] )
-    count=count+1  } }
+#my_matrix <- colitis_data_matrix_I[,ix]
+#the_rest <- colnames(colitis_data_matrix_I[,ix])
+#rm(my_storage) ; my_storage <- list() ; count=1
+#for (xxi in 1:length(the_rest) ){
+#  for( xxy in 1:length(the_rest)){
+#    my_test <- cor.test(my_matrix[,the_rest[xxi]],my_matrix[,the_rest[xxy]],method="spearman")    
+#    my_storage[[count]] <- data.frame( p.value = my_test$p.value , S = my_test$statistic , Rho = my_test$estimate ,
+#                                       Sample_A = the_rest[xxi] , Sample_B = the_rest[xxy] )
+#    count=count+1  } }
 ### data process
-my_storage <- do.call(rbind,my_storage)
-my_storage$nP.value <- -log10(my_storage$p.value)
-my_storage$nP.value[my_storage$nP.value > 10]  <- 10
+#my_storage <- do.call(rbind,my_storage)
+#my_storage$nP.value <- -log10(my_storage$p.value)
+#my_storage$nP.value[my_storage$nP.value > 10]  <- 10
 ### plot
 #pdf(file="u01_olink_colitis_figures/correlations_internal_controls_io+i.pdf",width = 4, height = 3.5)
-ggplot(my_storage, aes(Sample_A, Sample_B, color= Rho, size=nP.value )) + 
-  geom_point(shape=16)+ geom_text(aes(label=round(Rho,2)),size=2,color="black") +
-  scale_colour_gradient2(low='firebrick', mid="white",high='steelblue', name='Rho') + #,breaks = c(-2.8, 0, 1, 5)) + #scale_color_viridis() +
-  theme_bw() +rotate_x_text(angle=45) + 
-  labs(x ='', y='', title='IPCs-I') 
+#ggplot(my_storage, aes(Sample_A, Sample_B, color= Rho, size=nP.value )) + 
+#  geom_point(shape=16)+ geom_text(aes(label=round(Rho,2)),size=2,color="black") +
+#  scale_colour_gradient2(low='firebrick', mid="white",high='steelblue', name='Rho') + #,breaks = c(-2.8, 0, 1, 5)) + #scale_color_viridis() +
+#  theme_bw() +rotate_x_text(angle=45) + 
+#  labs(x ='', y='', title='IPCs-I') 
 #dev.off()
+
+### Correlation between samples
 ### +++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
 ### All samples in experiment 1 (samples vs samples)
+### experiment I
 ### +++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
 ix <- which(protein_metadata$Experiment_Short %in% "I")
 ### subset
@@ -356,6 +433,10 @@ pheatmap( as.matrix(rho.matrix),
           annotation_col = annotation_data)
 dev.off()
 #############################################################################################################################################
+
+
+
+#############################################################################################################################################
 ### DE
 #############################################################################################################################################
 
@@ -447,18 +528,18 @@ my_full_mixlm_results[[4]]$Panel  <- "Inflammation"
 form <- ~ (1|Study_Type) + (1|Patient) + (1|Plate) + (1|Timepoint) + (1|Colitis) 
 variance_exprs_matrix <- fitExtractVarPartModel(colitis_data_matrix_I, form, annotation_data)
 ### Figure
-pdf(file="u01_olink_colitis_figures/VP_olink_inflammation_experiment_all_covariates_model.pdf",width = 4, height = 4)
-plotVarPart( sortCols( variance_exprs_matrix[,] , decreasing=FALSE) ) + 
-  ggtitle('Olink Target 96 Inflammation(v.3022)') + 
-  ylim(0,75) + 
-  theme(axis.text.x = element_text(angle = 45,hjust = 1)) + 
-  coord_flip() + 
-  theme(plot.title = element_text(size=12)) + 
-  ylab("Variance explained (%)") +
-  theme(text = element_text(size=rel(4.8)),
-        legend.text=element_text(size=rel(3.0)),
-        axis.title.x = element_text(size=rel(3.0)),
-        plot.title=element_text(size=rel(2)) )
+#pdf(file="u01_olink_colitis_figures/VP_olink_inflammation_experiment_all_covariates_model.pdf",width = 4, height = 4)
+#plotVarPart( sortCols( variance_exprs_matrix[,] , decreasing=FALSE) ) + 
+#  ggtitle('Olink Target 96 Inflammation(v.3022)') + 
+#  ylim(0,75) + 
+#  theme(axis.text.x = element_text(angle = 45,hjust = 1)) + 
+#  coord_flip() + 
+#  theme(plot.title = element_text(size=12)) + 
+#  ylab("Variance explained (%)") +
+#  theme(text = element_text(size=rel(4.8)),
+#        legend.text=element_text(size=rel(3.0)),
+#        axis.title.x = element_text(size=rel(3.0)),
+#        plot.title=element_text(size=rel(2)) )
 dev.off()
 ###
 
@@ -468,14 +549,12 @@ my_full_mixlm_results[[5]]$Model <- "~ (1|Study_Type) + (1|Patient) + (1|Plate) 
 my_full_mixlm_results[[5]]$Panel  <- "Inflammation"
 
 ### +++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
-### +++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
 ### study correction using non-parametric bayes adjustment
 ### +++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
 library(sva)
 Batch = as.numeric(as.factor(as.character(annotation_data$Study_Type)))
 modcombat = model.matrix(~1, data=annotation_data)
 colitis_data_matrix_I_study_corrected = ComBat(dat=colitis_data_matrix_I, batch=Batch, mod=modcombat, par.prior=TRUE, prior.plots=FALSE)
-### +++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
 ### +++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
 
 ### time point specific model
@@ -507,27 +586,45 @@ my_full_mixlm_results[[i]]$Data <- "Batch corrected for Studies"
 my_full_mixlm_results[[i]]$Model  <- "~ 0 + Colitis_Timepoint"
 my_full_mixlm_results[[i]]$Panel  <- "Inflammation"
 
+
+### Variance partition corrected for study
+### +++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+### copy data
+annotation_data <- colitis_metadata
+### subset for inflammation panel
+ix <- which(protein_metadata$Experiment_Short %in% "I")
+colitis_data_matrix_I <- colitis_data_matrix[ix,]
+
 ### study correction
-form <- ~ (1|Study_Type) + (1|Patient) + (1|Plate) + (1|Timepoint) + (1|Colitis) 
+library(sva)
+Batch = as.numeric(as.factor(as.character(annotation_data$Study_Type)))
+modcombat = model.matrix(~1, data=annotation_data)
+colitis_data_matrix_I_study_corrected = ComBat(dat=colitis_data_matrix_I, batch=Batch, mod=modcombat, par.prior=TRUE, prior.plots=FALSE)
+
+form <- ~ (1|QC) + (1|Patient_ID) + (1|Plate) + (1|Sex) + Age_at_IPI_Start + IPI_dose_mg_kg + NIVO_dose_mg_kg + (1|Ethnicity) + (1|Timepoint) + (1|Study) + (1|Colitis) 
 variance_exprs_matrix <- fitExtractVarPartModel(colitis_data_matrix_I_study_corrected, form, annotation_data)
+
 ###
 pdf(file="u01_olink_colitis_figures/VP_olink_inflammation_experiment_all_covariates_model_CORRECTED_4_study.pdf",width = 4, height = 4)
 plotVarPart( sortCols( variance_exprs_matrix[,] , decreasing=FALSE) ) + 
-  ggtitle('Olink Target 96 Inflammation(v.3022)') + 
-  ylim(0,75) + theme(axis.text.x = element_text(angle = 45,hjust = 1)) + 
+  ggtitle('Olink Target 96\nInflammation(v.3022)') + 
+  ylim(0,100) + theme(axis.text.x = element_text(angle = 0,hjust = 1)) + 
   coord_flip() + 
-  ylab("Variance explained (%)") +
+  ylab("Variance (%)") +
   theme(text = element_text(size=rel(4.8)),
         legend.text=element_text(size=rel(3.0)),
         axis.title.x = element_text(size=rel(3.0)),
         plot.title=element_text(size=rel(2)) )
 dev.off()
 ###
+
 i<-8
 my_full_mixlm_results[[i]] <- variance_exprs_matrix
 my_full_mixlm_results[[i]]$Data <- "All Studies"
-my_full_mixlm_results[[i]]$Model <- "~ (1|Study_Type) + (1|Patient) + (1|Plate) + (1|Timepoint) + (1|Colitis)"
+my_full_mixlm_results[[i]]$Model <- "~ (1|QC) + (1|Patient_ID) + (1|Plate) + (1|Sex) + Age_at_IPI_Start + IPI_dose_mg_kg + NIVO_dose_mg_kg + (1|Ethnicity) + (1|Timepoint) + (1|Study) + (1|Colitis)"
 my_full_mixlm_results[[i]]$Panel  <- "Inflammation"
+### +++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+
 
 ### +++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
 ### All samples in experiment inflammation/Oncology
@@ -631,8 +728,20 @@ my_full_mixlm_results[[i]] <- variance_exprs_matrix
 my_full_mixlm_results[[i]]$Data <- "All Studies"
 my_full_mixlm_results[[i]]$Model <- "~ (1|Study_Type) + (1|Patient) + (1|Plate) + (1|Timepoint) + (1|Colitis)"
 my_full_mixlm_results[[i]]$Panel  <- "IO"
+#############################################################################################################################################
 
+
+###
 ### study correction
+#############################################################################################################################################
+### copy
+annotation_data <- colitis_metadata
+
+### subset for inflammation panel
+ix <- which(protein_metadata$Experiment_Short %in% "IO")
+colitis_data_matrix_I <- colitis_data_matrix[ix,]
+
+### batch correction
 library(sva)
 Batch = as.numeric(as.factor(as.character(annotation_data$Study_Type)))
 modcombat = model.matrix(~1, data=annotation_data)
@@ -669,16 +778,19 @@ my_full_mixlm_results[[i]]$Data <- "Batch corrected for Studies"
 my_full_mixlm_results[[i]]$Model  <- "~ 0 + Colitis_Timepoint"
 my_full_mixlm_results[[i]]$Panel  <- "IO"
 
-### study correction
-form <- ~ (1|Study_Type) + (1|Patient) + (1|Plate) + (1|Timepoint) + (1|Colitis) 
-variance_exprs_matrix <- fitExtractVarPartModel(colitis_data_matrix_I_study_corrected, form, annotation_data)
+
+### study correction variance run
+### IO panel
+form <- ~ (1|QC) + (1|Patient_ID) + (1|Plate) + (1|Sex) + Age_at_IPI_Start + IPI_dose_mg_kg + NIVO_dose_mg_kg + (1|Ethnicity) + (1|Timepoint) + (1|Study) + (1|Colitis)
+
+variance_exprs_matrix <- fitExtractVarPartModel(colitis_data_matrix_I_study_corrected, form, colitis_metadata)
 ###
 pdf(file="u01_olink_colitis_figures/VP_olink_IO_experiment_all_covariates_model_CORRECTED_4_study.pdf",width = 4, height = 4)
 plotVarPart( sortCols( variance_exprs_matrix[,] , decreasing=FALSE) ) + 
-  ggtitle('Olink Target 96 Immuno-Oncology(v.3112)') + ylim(0,75) + 
-  theme(axis.text.x = element_text(angle = 45,hjust = 1)) + 
+  ggtitle('Olink Target 96\nImmuno-Oncology(v.3112)') + ylim(0,100) + 
+  theme(axis.text.x = element_text(angle = 0,hjust = 1)) + 
   coord_flip() + 
-  ylab("Variance explained (%)") +
+  ylab("Variance (%)") +
   theme(text = element_text(size=rel(4.8)),
         legend.text=element_text(size=rel(3.0)),
         axis.title.x = element_text(size=rel(3.0)),
@@ -690,6 +802,9 @@ my_full_mixlm_results[[i]] <- variance_exprs_matrix
 my_full_mixlm_results[[i]]$Data <- "All Studies"
 my_full_mixlm_results[[i]]$Model <- "~ (1|Study_Type) + (1|Patient) + (1|Plate) + (1|Timepoint) + (1|Colitis)"
 my_full_mixlm_results[[i]]$Panel  <- "IO"
+#############################################################################################################################################
+
+
 
 #############################################################################################################################################
 ### +++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
@@ -1605,15 +1720,19 @@ lmfreq_results <- do.call(rbind,lmfreq_results)
 rownames(lmfreq_results) <- NULL
 ###
 ###### from single study comparisons
-write.csv(file="statistics_single_comparisons.csv",lmfreq_results)
+#write.csv(file="statistics_single_comparisons.csv",lmfreq_results)
 ###### significant results from study corrected models
-write.csv(file="statistics_adjusted_models_comparisons.csv",final_result)
+#write.csv(file="statistics_adjusted_models_comparisons.csv",final_result)
+
+
 
 ###
 #############################################################################################################################################
 #############################################################################################################################################
+###
 ### Based on sugestions from Sacha, We'll merge both panels, treating them as independed measurements
 ### IO + I panel merge
+###
 #############################################################################################################################################
 #############################################################################################################################################
 ###
@@ -2082,16 +2201,21 @@ ggviolin(data=my_melted_df, x="Status", y="value", color="Colitis",fill="Colitis
 
 
 #############################################################################################################################################
-### full model to show
 #############################################################################################################################################
-###
-ix <- which(colnames(colitis_metadata) %in% c("QC","Timepoint","Study","Colitis"))
-annotation_data <- colitis_metadata[,ix]
-rownames(annotation_data) <- colitis_metadata$sample_id
+#############################################################################################################################################
+### reviewed models and results start here.
+### full model to show and additional figures
+### 
+#############################################################################################################################################
+#############################################################################################################################################
+#############################################################################################################################################
 
-ix <- which( ! annotation_data$Study %in% "control" )
-colitis_data_matrix_I <- as.matrix(colitis_data_matrix[,ix])
-annotation_data <- annotation_data[ix,]
+### copy
+annotation_data <- colitis_metadata
+rownames(annotation_data) <- colitis_metadata$sample_id
+identical(rownames(annotation_data), colnames(colitis_data_matrix))
+
+colitis_data_matrix_I <- as.matrix(colitis_data_matrix)
 
 library(sva)
 colitis_data_matrix_I <- as.matrix(colitis_data_matrix_I)
@@ -2099,10 +2223,13 @@ Batch = as.numeric(as.factor(as.character(annotation_data$Study)))
 modcombat = model.matrix(~1, data=annotation_data)
 colitis_data_matrix_I_study_corrected = ComBat(dat=colitis_data_matrix_I, batch=Batch, mod=modcombat, par.prior=TRUE, prior.plots=FALSE)
 
-annotation_data$CT <- paste(annotation_data$Colitis,annotation_data$Timepoint,sep="___")
+### design
+design <- model.matrix( ~ 0 + Colitis_Timepoint + Plate + Age_at_IPI_Start + IPI_dose_mg_kg + NIVO_dose_mg_kg + Ethnicity + Sex, data = annotation_data ) 
+### simple names
+colnames(design) <- gsub("Colitis_Timepoint","",colnames(design))
+### simplify further
+colnames(design) <- make.names(colnames(design))
 
-# comparisons
-design <- model.matrix( ~ 0 + CT, data = annotation_data ) ; colnames(design) <- gsub("CT","",colnames(design))
 contr.matrix <- makeContrasts(  "Colitis_A" = Yes___A - No___A, 
                                 "Colitis_C" = Yes___C - No___C, 
                                 "Not_Colitis_C_A" = No___C - No___A, 
@@ -2114,8 +2241,10 @@ contr.matrix <- makeContrasts(  "Colitis_A" = Yes___A - No___A,
                                 "Colitis_D_C" = Yes___D - Yes___C,
                                 levels = colnames(design) )
 
-vfit <- lmFit(colitis_data_matrix_I_study_corrected, design) ; vfit <- contrasts.fit(vfit, contrasts=contr.matrix)
+vfit <- lmFit(colitis_data_matrix_I_study_corrected, design) 
+vfit <- contrasts.fit(vfit, contrasts=contr.matrix)
 efit <- eBayes(vfit, robust = TRUE) ; summary(decideTests(efit))
+
 ### final result
 final_result_corrected_model<-list()
 for ( iii in 1:length(colnames(summary(decideTests(efit))))){
@@ -2138,13 +2267,11 @@ final_result_corrected_model$Contrast[final_result_corrected_model$Contrast %in%
 final_result_corrected_model$Contrast[final_result_corrected_model$Contrast %in% "Colitis_D_C"] <- "Colitis: (Post vs Week 6)"
 
 final_result_corrected_model$nLog10FDR <- -log10(final_result_corrected_model$adj.P.Val)
-#final_result_corrected_model$Significance 
 
 table(final_result_corrected_model$Contrast)
 
 final_result_corrected_model$Contrast <- factor(final_result_corrected_model$Contrast, levels = c("Baseline: (Colitis vs No Colitis)","Week 6: (Colitis vs No Colitis)", "Colitis: (Colitis vs Baseline)","Colitis: (Week 6 vs Colitis)",
                                                                                                   "Colitis: (Week6 vs Baseline)","No colitis: (Week 6 vs Baseline)", "Colitis: (Post vs Baseline)","Colitis: (Post vs Colitis)","Colitis: (Post vs Week 6)") )
-
 
 out_mat <- pivot_wider(data=final_result_corrected_model[,c("Proteins","Contrast","logFC")], names_from=Proteins, values_from=logFC) # %>% unnest() 
 out_mat <- as.data.frame(out_mat)
@@ -2180,8 +2307,14 @@ rm(testXYY,out,out_mat)
 #  labs(x ='', y='', title='') 
 #dev.off()
 
+### store results
+write.csv(file="statistics_adjusted_models_comparisons.csv",final_result_corrected_model)
+###
+
+#############################################################################################################################################
 #############################################################################################################################################
 ### SAMPLES TABLE
+#############################################################################################################################################
 #############################################################################################################################################
 
 dim(colitis_data_matrix_I)
@@ -2212,26 +2345,41 @@ ggplot(data=my_temporal_matrix,aes(x=Var1,y=Var2,fill=Freq)) + geom_tile() +
   labs(x ='', y='', title='Samples Table',fill="#n") 
 dev.off()
 
+
+#############################################################################################################################################
 #############################################################################################################################################
 ### full model to show (per study)
 #############################################################################################################################################
+#############################################################################################################################################
 
-identical(rownames(annotation_data), colnames(colitis_data_matrix_I))
-annotation_data <- annotation_data[ match(colnames(colitis_data_matrix_I), rownames(annotation_data)), ]
-identical(rownames(annotation_data), colnames(colitis_data_matrix_I))
+### rownames
+rownames(colitis_metadata) <- colitis_metadata$sample_id
+### order
+identical(rownames(colitis_metadata), colnames(colitis_data_matrix))
 
 study_levels <- levels(as.factor(annotation_data$Study))
 final_result_per_study_model <- list()
 
+### copy
+annotation_data <- colitis_metadata
+colitis_data_matrix_I <- colitis_data_matrix
+
+### loop 
 for ( i in 1:length(study_levels)) {
   
   annotation_data_X2  <- annotation_data[which(annotation_data$Study %in% study_levels[i]),]
   colitis_data_matrix_IX2  <- colitis_data_matrix_I[,which(annotation_data$Study %in% study_levels[i])]
   
-# comparisons
-design <- model.matrix( ~ 0 + CT, data = annotation_data_X2 ) ; colnames(design) <- gsub("CT","",colnames(design))
-contr.matrix <- makeContrasts(  "Colitis_A" = Yes___A - No___A, 
-                                "Colitis_C" = Yes___C - No___C, 
+### Model & Comparisons
+design <- model.matrix( ~ 0 + Colitis_Timepoint + Plate + Age_at_IPI_Start + IPI_dose_mg_kg + NIVO_dose_mg_kg + Ethnicity + Sex, data = annotation_data_X2 ) 
+### simplify labels
+colnames(design) <- gsub("Colitis_Timepoint","",colnames(design))
+### fix names
+colnames(design) <- make.names(colnames(design))
+
+### Contrast or comparison matrix
+contr.matrix <- makeContrasts(  "Colitis_A_Yes_vs_No" = Yes___A - No___A, 
+                                "Colitis_C_Yes_vs_No" = Yes___C - No___C, 
                                 "Not_Colitis_C_A" = No___C - No___A, 
                                 "Colitis_B_A" = Yes___B - Yes___A,
                                 "Colitis_C_A" = Yes___C - Yes___A,
@@ -2240,9 +2388,16 @@ contr.matrix <- makeContrasts(  "Colitis_A" = Yes___A - No___A,
                                 "Colitis_D_B" = Yes___D - Yes___B,
                                 "Colitis_D_C" = Yes___D - Yes___C,
                                 levels = colnames(design) )
+### chain for correlations
+# block2 <- as.numeric(as.factor( annotation_data_X2$Patient_ID ))
+### correlations
+# dupcor2 <- duplicateCorrelation(colitis_data_matrix_IX2, design=NULL, block=block2)
+## fit with correlations
+# vfit <- lmFit(colitis_data_matrix_IX2, design, block=block2, correlation=dupcor2$consensus)
+vfit <- lmFit(colitis_data_matrix_IX2, design) ; 
+vfit <- contrasts.fit(vfit, contrasts=contr.matrix)
+efit <- eBayes(vfit, robust = TRUE) ; print(summary(decideTests(efit)))
 
-vfit <- lmFit(colitis_data_matrix_IX2, design) ; vfit <- contrasts.fit(vfit, contrasts=contr.matrix)
-efit <- eBayes(vfit, robust = TRUE) ; summary(decideTests(efit))
 ### final result
 temporal_results_file<-list()
 for ( iii in 1:length(colnames(summary(decideTests(efit))))){
@@ -2252,8 +2407,8 @@ for ( iii in 1:length(colnames(summary(decideTests(efit))))){
 
 temporal_results_file <- do.call(rbind,temporal_results_file)
 temporal_results_file$Contrast_long <- temporal_results_file$Contrast
-temporal_results_file$Contrast[temporal_results_file$Contrast %in% "Colitis_A"] <- "Baseline: (Colitis vs No Colitis)"
-temporal_results_file$Contrast[temporal_results_file$Contrast %in% "Colitis_C"] <- "Week 6: (Colitis vs No Colitis)"
+temporal_results_file$Contrast[temporal_results_file$Contrast %in% "Colitis_A_Yes_vs_No"] <- "Baseline: (Colitis vs No Colitis)"
+temporal_results_file$Contrast[temporal_results_file$Contrast %in% "Colitis_C_Yes_vs_No"] <- "Week 6: (Colitis vs No Colitis)"
 temporal_results_file$Contrast[temporal_results_file$Contrast %in% "Not_Colitis_C_A"] <- "No colitis: (Week 6 vs Baseline)"
 temporal_results_file$Contrast[temporal_results_file$Contrast %in% "Colitis_B_A"] <- "Colitis: (Colitis vs Baseline)"
 temporal_results_file$Contrast[temporal_results_file$Contrast %in% "Colitis_C_A"] <- "Colitis: (Week6 vs Baseline)"
@@ -2279,8 +2434,7 @@ ggplot(final_result_per_study_model[ix,], aes(Proteins, Contrast, color= logFC, 
   labs(x ='', y='', title=paste("Study:",study_levels[1])) 
 dev.off()
 
-
-pdf(file="u01_olink_colitis_figures/mixed_linear_model_reviewed_results_per_study_part2.pdf",width = 8,height = 6)
+pdf(file="u01_olink_colitis_figures/mixed_linear_model_reviewed_results_per_study_part2.pdf",width = 10,height = 6)
 ix <- which(final_result_per_study_model$adj.P.Val<0.05 & final_result_per_study_model$study %in% study_levels[2])
 ggplot(final_result_per_study_model[ix,], aes(Proteins, Contrast, color= logFC, size=nLog10FDR )) + 
   geom_point()+ #geom_point(shape=16)+ 
@@ -2301,6 +2455,10 @@ ggplot(final_result_per_study_model[ix,], aes(Proteins, Contrast, color= logFC, 
   theme_bw() +rotate_x_text(angle=25) + coord_flip()+ 
   labs(x ='', y='', title=paste("Study:",study_levels[3])) 
 dev.off()
+
+### write the correct file to store the results
+write.csv(file="statistics_single_comparisons.csv",final_result_per_study_model)
+###
 
 final_result_corrected_model$direction <- final_result_corrected_model$logFC > 0
 final_result_corrected_model$direction[final_result_corrected_model$direction %in% "TRUE"] <- "up"
@@ -2484,6 +2642,10 @@ to_test <- list( C0 = extract_comb(m,'1000'), #1
                  C3 = extract_comb(m,'0001') ,#4
                  C5 = extract_comb(m,'1110') ) #5
 ### names(to_test) <- names(my_list)
+
+# extract_comb(m,'1111')
+# extract_comb(m,'0001')
+# extract_comb(m,'1110')
 
 my_proteins_to_test <- unique(sort(unlist(to_test[5])))
 
@@ -2738,6 +2900,21 @@ ggviolin(data=my_melted_df, x="Status", y="value", color="Colitis",fill="Colitis
         plot.title=element_text(size=rel(4.8)) ) +
   theme(plot.margin=unit(c(t=5,r=5,b=5,l=100),"pt"))
 dev.off()
+
+#############################################################################################################################################
+### Overlap between Markers in i io plates
+#############################################################################################################################################
+
+dim(colitis_data_matrix_iio)
+dim(colitis_data_matrix_I)
+dim(colitis_data_matrix)
+colitis_data_matrix[1:5,1:5]
+
+my_venn_4_panels <- list( I = tidyr::separate(data.frame(protein_metadata$Marker[protein_metadata$Experiment_Short %in% "I"]), 1, sep="\\.\\.\\.", c("a","b","c"))$a,
+                         IO = tidyr::separate(data.frame(protein_metadata$Marker[protein_metadata$Experiment_Short %in% "IO"]), 1, sep="\\.\\.\\.", c("a","b","c"))$a)
+
+library(Vennerable)
+plot(Venn(my_venn_4_panels), doWeights = TRUE, type = "circles")
 
 #############################################################################################################################################
 ### 
